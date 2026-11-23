@@ -370,7 +370,7 @@ pub fn run(
     let access_log = Arc::new(Mutex::new(Vec::new()));
     let mut portfolio = Portfolio::new(config.initial_cash);
     let cost_model = CostModel::from_config(config);
-    let mut pending: BTreeMap<String, Vec<PendingOrder>> = BTreeMap::new();
+    let mut pending: BTreeMap<String, PendingOrder> = BTreeMap::new();
     let mut decisions: Vec<Decision> = Vec::new();
     let mut trades: Vec<Trade> = Vec::new();
     let mut equity: Vec<EquityPoint> = Vec::new();
@@ -395,11 +395,8 @@ pub fn run(
 
         // 1. Orders from the previous bar for each symbol fill at this open.
         for bar in &batch {
-            if let Some(orders) = pending.remove(&bar.symbol) {
-                for order in orders {
-                    if order.quantity == 0.0 || !order.quantity.is_finite() {
-                        continue;
-                    }
+            if let Some(order) = pending.remove(&bar.symbol) {
+                if order.quantity != 0.0 && order.quantity.is_finite() {
                     let execution = cost_model.execute(bar.open, order.quantity, bar.volume);
                     portfolio.apply_fill(
                         &order.symbol,
@@ -467,14 +464,16 @@ pub fn run(
                 let target_value = order.target_weight * portfolio_equity;
                 let quantity = (target_value - current * price) / price;
                 if quantity.is_finite() && quantity.abs() > 1e-12 {
-                    pending
-                        .entry(order.symbol.clone())
-                        .or_default()
-                        .push(PendingOrder {
+                    pending.insert(
+                        order.symbol.clone(),
+                        PendingOrder {
                             symbol: order.symbol.clone(),
                             quantity,
                             target_weight: order.target_weight,
-                        });
+                        },
+                    );
+                } else {
+                    pending.remove(&order.symbol);
                 }
             }
         }
@@ -495,7 +494,6 @@ pub fn run(
 
     let unfilled_orders = pending
         .into_values()
-        .flatten()
         .map(|order| Order {
             symbol: order.symbol,
             target_weight: order.target_weight,
@@ -578,6 +576,20 @@ mod tests {
         }
     }
 
+    fn bar_for(symbol: &str, ts: i64, open: f64, close: f64) -> Bar {
+        Bar {
+            symbol: symbol.into(),
+            ts,
+            published_at: ts,
+            version: 1,
+            open,
+            high: open.max(close) * 1.01,
+            low: open.min(close) * 0.99,
+            close,
+            volume: 1_000_000.0,
+        }
+    }
+
     fn dataset() -> Vec<Bar> {
         vec![
             bar(DAY, 10.0, 10.0, 1, DAY),
@@ -633,6 +645,38 @@ mod tests {
         }
     }
 
+    struct TwoAssetBalanced;
+
+    impl Strategy for TwoAssetBalanced {
+        fn on_bar(&mut self, ctx: &Context, _bar: &Bar) -> Result<Vec<Order>, EngineError> {
+            if ctx.clock == DAY {
+                Ok(vec![
+                    Order {
+                        symbol: "SPY".into(),
+                        target_weight: 0.6,
+                    },
+                    Order {
+                        symbol: "TLT".into(),
+                        target_weight: 0.4,
+                    },
+                ])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    fn two_asset_dataset() -> Vec<Bar> {
+        vec![
+            bar_for("SPY", DAY, 10.0, 10.0),
+            bar_for("TLT", DAY, 20.0, 20.0),
+            bar_for("SPY", 2 * DAY, 10.0, 11.0),
+            bar_for("TLT", 2 * DAY, 20.0, 20.0),
+            bar_for("SPY", 3 * DAY, 11.0, 11.0),
+            bar_for("TLT", 3 * DAY, 20.0, 20.0),
+        ]
+    }
+
     #[test]
     fn orders_fill_at_next_open() {
         let store = Arc::new(PointInTimeStore::from_rows(dataset()).unwrap());
@@ -657,6 +701,58 @@ mod tests {
         assert_eq!(result.decisions.len(), 4);
         // The first decision cannot fill on its own bar.
         assert_eq!(result.equity[0].equity, 1_000_000.0);
+    }
+
+    #[test]
+    fn multi_asset_targets_are_deduplicated_and_split_capital() {
+        let store = Arc::new(PointInTimeStore::from_rows(two_asset_dataset()).unwrap());
+        let config = EngineConfig {
+            initial_cash: 1_000_000.0,
+            commission_bps: 0.0,
+            commission_fixed: 0.0,
+            spread_bps: 0.0,
+            slippage_bps_at_full_volume: 0.0,
+            periods_per_year: 252,
+            start_ts: None,
+            end_ts: None,
+            masked: false,
+            strict_future_access: true,
+        };
+        let result = run(&mut TwoAssetBalanced, store, &config).unwrap();
+        // Both callbacks at the first timestamp emit the same two targets.
+        // Only one pending order per symbol may survive.
+        assert_eq!(result.trades.len(), 2);
+        assert_eq!(result.trades[0].symbol, "SPY");
+        assert_eq!(result.trades[1].symbol, "TLT");
+        assert!((result.trades[0].notional - 600_000.0).abs() < 1e-6);
+        assert!((result.trades[1].notional - 400_000.0).abs() < 1e-6);
+        assert!((result.final_equity - 1_060_000.0).abs() < 1e-6);
+        assert!(result.unfilled_orders.is_empty());
+        assert_eq!(result.decisions.len(), 6);
+    }
+
+    #[test]
+    fn commissions_are_charged_per_asset_fill() {
+        let store = Arc::new(PointInTimeStore::from_rows(two_asset_dataset()).unwrap());
+        let config = EngineConfig {
+            initial_cash: 1_000_000.0,
+            commission_bps: 1.0,
+            commission_fixed: 1.0,
+            spread_bps: 0.0,
+            slippage_bps_at_full_volume: 0.0,
+            periods_per_year: 252,
+            start_ts: None,
+            end_ts: None,
+            masked: false,
+            strict_future_access: true,
+        };
+        let result = run(&mut TwoAssetBalanced, store, &config).unwrap();
+        assert_eq!(result.trades.len(), 2);
+        // SPY: 1 fixed + 600,000 * 1 bp = 61. TLT: 1 + 400,000 * 1 bp = 41.
+        assert!((result.trades[0].commission - 61.0).abs() < 1e-9);
+        assert!((result.trades[1].commission - 41.0).abs() < 1e-9);
+        assert!((result.metrics.commission_cost - 102.0).abs() < 1e-9);
+        assert!((result.metrics.total_cost - 102.0).abs() < 1e-9);
     }
 
     #[test]
