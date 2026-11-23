@@ -205,6 +205,46 @@ impl PointInTimeStore {
         history
     }
 
+    /// Every bar of a symbol at its newest version, without any visibility
+    /// filter. This is the raw research view; the engine only exposes it
+    /// through `Context::research_series`, which is audited and rejected in
+    /// strict mode.
+    pub fn latest_series(&self, symbol: &str) -> Vec<crate::types::Bar> {
+        let Some(indices) = self.by_symbol.get(symbol) else {
+            return Vec::new();
+        };
+        let mut series: Vec<crate::types::Bar> = Vec::new();
+        for &index in indices {
+            let row = &self.rows[index].bar;
+            if series.last().map(|bar| bar.ts) == Some(row.ts) {
+                *series.last_mut().expect("series is non-empty") = row.clone();
+            } else {
+                series.push(row.clone());
+            }
+        }
+        series
+    }
+
+    /// Every bar visible at `as_of` (including the current bar), each at its
+    /// newest published version.
+    pub fn series_as_of(&self, symbol: &str, as_of: i64) -> Vec<crate::types::Bar> {
+        let Some(indices) = self.by_symbol.get(symbol) else {
+            return Vec::new();
+        };
+        let mut series: Vec<crate::types::Bar> = Vec::new();
+        for &index in indices {
+            let row = &self.rows[index].bar;
+            if row.ts <= as_of && row.published_at <= as_of {
+                if series.last().map(|bar| bar.ts) == Some(row.ts) {
+                    *series.last_mut().expect("series is non-empty") = row.clone();
+                } else {
+                    series.push(row.clone());
+                }
+            }
+        }
+        series
+    }
+
     /// Version-1 bars that become market events, in deterministic
     /// `(timestamp, symbol)` order.
     pub fn events_in_range(

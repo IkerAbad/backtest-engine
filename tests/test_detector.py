@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from backtest_engine import (
     Context,
+    FullSampleZScore,
+    FutureAccessError,
     LookAheadError,
     LookAheadTrap,
     MeanReversion,
@@ -12,6 +14,7 @@ from backtest_engine import (
     Order,
     PointInTimeStore,
     check_lookahead,
+    run_backtest,
     run_checked,
 )
 from backtest_engine._backtest_engine import Bar
@@ -65,6 +68,27 @@ def test_trap_is_detected_with_location(store: PointInTimeStore) -> None:
     assert "first divergent decision" in report.summary
     assert "normal: ACME +1.000000" in report.summary
     assert "masked: ACME +0.000000" in report.summary
+
+
+def test_full_sample_normalization_is_detected(store: PointInTimeStore) -> None:
+    report = check_lookahead(
+        lambda: FullSampleZScore(),
+        store,
+        default_config(),
+        strategy_name="full-sample z-score",
+    )
+    assert not report.passed
+    assert len(report.future_accesses) == 1
+    assert report.future_accesses[0].kind == "research_series"
+    assert report.future_accesses[0].future
+    assert report.divergences
+    assert report.divergences[0].normal != report.divergences[0].masked
+    assert "FAILED" in report.summary
+
+
+def test_full_sample_strategy_is_rejected_by_default(store: PointInTimeStore) -> None:
+    with pytest.raises(FutureAccessError, match="look-ahead denied"):
+        run_backtest(FullSampleZScore(), store, default_config())
 
 
 def test_run_checked_raises_on_trap(store: PointInTimeStore) -> None:

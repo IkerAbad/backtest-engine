@@ -21,6 +21,7 @@ from .detector import check_lookahead
 from .report import write_report
 from .strategies import (
     STRATEGIES,
+    FullSampleZScore,
     LookAheadTrap,
     MeanReversion,
     MovingAverage,
@@ -40,6 +41,8 @@ def _factory(name: str, args: argparse.Namespace) -> Callable[[], Strategy]:
     if name == "lookahead_trap":
         horizon = int(args.horizon_days) * 86_400
         return lambda: LookAheadTrap(horizon_seconds=horizon)
+    if name == "full_sample_zscore":
+        return lambda: FullSampleZScore()
     raise ValueError(f"unknown strategy {name!r}")
 
 
@@ -63,6 +66,8 @@ def _strategy_label(name: str, args: argparse.Namespace) -> str:
         return f"Mean reversion (window={int(args.window)}, entry_z={float(args.entry_z):g})"
     if name == "lookahead_trap":
         return f"Look-ahead trap (horizon={int(args.horizon_days)}d)"
+    if name == "full_sample_zscore":
+        return "Full-sample z-score (subtle look-ahead)"
     return name
 
 
@@ -217,6 +222,9 @@ def _cmd_walkforward(args: argparse.Namespace) -> int:
     name = str(args.strategy)
     if name == "lookahead_trap":
         print("walk-forward is not meaningful for the deliberate look-ahead trap")
+        return 2
+    if name == "full_sample_zscore":
+        print("walk-forward is not meaningful for the full-sample look-ahead strategy")
         return 2
     windows = [int(part) for part in str(args.windows).split(",") if part.strip()]
     if not windows:

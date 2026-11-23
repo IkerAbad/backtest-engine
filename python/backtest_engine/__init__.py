@@ -29,6 +29,7 @@ from .detector import (
 from .report import write_report
 from .strategies import (
     STRATEGIES,
+    FullSampleZScore,
     LookAheadTrap,
     MeanReversion,
     MovingAverage,
@@ -50,6 +51,7 @@ __all__ = [
     "EquityPoint",
     "Fold",
     "FutureAccessError",
+    "FullSampleZScore",
     "LookAheadError",
     "LookAheadReport",
     "LookAheadTrap",

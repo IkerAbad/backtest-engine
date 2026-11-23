@@ -49,7 +49,7 @@ impl Context {
     pub fn as_of(&self, symbol: &str, requested: i64) -> Result<Option<Bar>, EngineError> {
         let future = requested > self.clock;
         if future && self.strict && !self.masked {
-            self.log_access(symbol, requested, None, None);
+            self.log_access(symbol, requested, None, None, future, "as_of");
             return Err(EngineError::FutureAccess {
                 symbol: symbol.to_string(),
                 clock: self.clock,
@@ -70,6 +70,42 @@ impl Context {
                 Some(requested)
             },
             returned.as_ref().map(|bar| bar.ts),
+            future,
+            "as_of",
+        );
+        Ok(returned)
+    }
+
+    /// Raw research view: the entire series, including future rows and future
+    /// revisions. Strict mode rejects it. The detector's masked run truncates
+    /// it at the clock, so a strategy that normalizes with full-sample
+    /// statistics is caught.
+    pub fn research_series(&self, symbol: &str) -> Result<Vec<Bar>, EngineError> {
+        let all = self.store.latest_series(symbol);
+        let requested = all.last().map_or(self.clock, |bar| bar.ts);
+        let future = all
+            .iter()
+            .any(|bar| bar.ts > self.clock || bar.published_at > self.clock);
+        if self.strict && !self.masked {
+            self.log_access(symbol, requested, None, None, future, "research_series");
+            return Err(EngineError::FutureAccess {
+                symbol: symbol.to_string(),
+                clock: self.clock,
+                requested,
+            });
+        }
+        let returned = if self.masked {
+            self.store.series_as_of(symbol, self.clock)
+        } else {
+            all
+        };
+        self.log_access(
+            symbol,
+            requested,
+            if self.masked { Some(self.clock) } else { None },
+            returned.last().map(|bar| bar.ts),
+            future,
+            "research_series",
         );
         Ok(returned)
     }
@@ -80,6 +116,8 @@ impl Context {
         requested: i64,
         effective: Option<i64>,
         returned: Option<i64>,
+        future: bool,
+        kind: &str,
     ) {
         self.access_log
             .lock()
@@ -90,8 +128,8 @@ impl Context {
                 requested_ts: requested,
                 effective_ts: effective,
                 returned_ts: returned,
-                future: requested > self.clock,
-                kind: "as_of".into(),
+                future,
+                kind: kind.into(),
             });
     }
 
@@ -175,6 +213,15 @@ impl Context {
     fn py_as_of_iso(&self, symbol: &str, ts: &str) -> PyResult<Option<Bar>> {
         let parsed = parse_timestamp(ts).map_err(pyo3::exceptions::PyValueError::new_err)?;
         self.as_of(symbol, parsed).map_err(PyErr::from)
+    }
+
+    /// Returns the whole stored series for `symbol`, including future rows and
+    /// future revisions. This is a research escape hatch that models handing a
+    /// full DataFrame to a strategy. Strict runs reject it. The detector's
+    /// masked run truncates it at the clock.
+    #[pyo3(name = "research_series")]
+    fn py_research_series(&self, symbol: &str) -> PyResult<Vec<Bar>> {
+        self.research_series(symbol).map_err(PyErr::from)
     }
 
     fn order(&self, symbol: &str, target_weight: f64) -> PyResult<Order> {
@@ -577,6 +624,15 @@ mod tests {
         }
     }
 
+    struct ResearchCheater;
+
+    impl Strategy for ResearchCheater {
+        fn on_bar(&mut self, ctx: &Context, bar: &Bar) -> Result<Vec<Order>, EngineError> {
+            let _ = ctx.research_series(&bar.symbol);
+            Ok(Vec::new())
+        }
+    }
+
     #[test]
     fn orders_fill_at_next_open() {
         let store = Arc::new(PointInTimeStore::from_rows(dataset()).unwrap());
@@ -638,6 +694,25 @@ mod tests {
             strict_future_access: true,
         };
         let error = run(&mut SwallowsTheError, store, &config).unwrap_err();
+        assert!(matches!(error, EngineError::FutureAccess { .. }));
+    }
+
+    #[test]
+    fn strict_mode_rejects_research_series() {
+        let store = Arc::new(PointInTimeStore::from_rows(dataset()).unwrap());
+        let config = EngineConfig {
+            initial_cash: 1_000_000.0,
+            commission_bps: 0.0,
+            commission_fixed: 0.0,
+            spread_bps: 0.0,
+            slippage_bps_at_full_volume: 0.0,
+            periods_per_year: 252,
+            start_ts: None,
+            end_ts: None,
+            masked: false,
+            strict_future_access: true,
+        };
+        let error = run(&mut ResearchCheater, store, &config).unwrap_err();
         assert!(matches!(error, EngineError::FutureAccess { .. }));
     }
 
