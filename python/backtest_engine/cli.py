@@ -25,6 +25,8 @@ from .strategies import (
     LookAheadTrap,
     MeanReversion,
     MovingAverage,
+    MultiAssetFutureTrap,
+    RelativeMomentum,
     Strategy,
 )
 from .walkforward import WalkForwardResult, walk_forward
@@ -43,6 +45,12 @@ def _factory(name: str, args: argparse.Namespace) -> Callable[[], Strategy]:
         return lambda: LookAheadTrap(horizon_seconds=horizon)
     if name == "full_sample_zscore":
         return lambda: FullSampleZScore()
+    if name == "relative_momentum":
+        lookback = int(args.window)
+        return lambda: RelativeMomentum(lookback=lookback)
+    if name == "multi_asset_trap":
+        horizon = int(args.horizon_days) * 86_400
+        return lambda: MultiAssetFutureTrap(horizon_seconds=horizon)
     raise ValueError(f"unknown strategy {name!r}")
 
 
@@ -68,6 +76,10 @@ def _strategy_label(name: str, args: argparse.Namespace) -> str:
         return f"Look-ahead trap (horizon={int(args.horizon_days)}d)"
     if name == "full_sample_zscore":
         return "Full-sample z-score (subtle look-ahead)"
+    if name == "relative_momentum":
+        return f"Relative momentum (lookback={int(args.window)})"
+    if name == "multi_asset_trap":
+        return "Multi-asset future trap"
     return name
 
 
@@ -226,6 +238,9 @@ def _cmd_walkforward(args: argparse.Namespace) -> int:
     if name == "full_sample_zscore":
         print("walk-forward is not meaningful for the full-sample look-ahead strategy")
         return 2
+    if name == "multi_asset_trap":
+        print("walk-forward is not meaningful for the multi-asset future trap")
+        return 2
     windows = [int(part) for part in str(args.windows).split(",") if part.strip()]
     if not windows:
         print("--windows must contain at least one integer")
@@ -237,6 +252,13 @@ def _cmd_walkforward(args: argparse.Namespace) -> int:
             return MovingAverage(window=int(str(params["window"])))
 
         factory: Callable[..., Strategy] = ma_factory
+    elif name == "relative_momentum":
+        grid = [{"lookback": lookback} for lookback in windows]
+
+        def rm_factory(**params: object) -> Strategy:
+            return RelativeMomentum(lookback=int(str(params["lookback"])))
+
+        factory = rm_factory
     else:
         entry_z = float(args.entry_z)
         grid = [{"window": window, "entry_z": entry_z} for window in windows]

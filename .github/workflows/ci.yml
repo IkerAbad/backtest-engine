@@ -89,11 +89,11 @@ jobs:
           path: reports/example.html
 
   case-study:
-    name: Real-data case study ${{ matrix.os }}
+    name: Real-data case studies ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -106,14 +106,22 @@ jobs:
         run: python -m pip install --upgrade pip
       - name: Build extension
         run: python -m pip install .
-      - name: Rebuild real-data report
+      - name: Rebuild single-asset report
         run: python scripts/build_case_study.py
-      - name: Verify committed case study hash
+      - name: Verify single-asset hash
         run: python scripts/verify_case_study.py
-      - name: Prove the subtle leak is detected
+      - name: Rebuild multi-asset report
+        run: python scripts/build_multi_asset_case.py
+      - name: Verify multi-asset hash
+        run: python scripts/verify_multi_asset_case.py
+      - name: Prove the subtle single-asset leak is detected
         run: python -m backtest_engine check --strategy full_sample_zscore --expect-detected
-      - name: Upload case study
+      - name: Prove the multi-asset trap is detected
+        run: python -m backtest_engine check --strategy multi_asset_trap --data data/spy_tlt_daily.csv --expect-detected
+      - name: Upload case studies
         uses: actions/upload-artifact@v7
         with:
-          name: case-study-${{ matrix.os }}
-          path: docs/case_study.html
+          name: case-studies-${{ matrix.os }}
+          path: |
+            docs/case_study.html
+            docs/multi_asset.html

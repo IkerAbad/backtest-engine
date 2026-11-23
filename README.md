@@ -15,6 +15,8 @@ is reproduced against a future-masked replay before an HTML report is written.
 - Walk-forward folds with non-overlapping train and test windows.
 - Real-data case study: 10 years of SPY, walk-forward, buy-and-hold comparison and a subtle
   full-sample look-ahead strategy that the detector catches.
+- Multi-asset case study: SPY and TLT, relative momentum, per-asset costs and a cross-sectional
+  future trap that the detector catches.
 - Self-contained HTML reports whose SHA-256 is verified on Linux, Windows and macOS in CI.
 
 ## Why Rust with PyO3
@@ -246,7 +248,9 @@ window on 252-bar training blocks and reports only the following 63-bar blocks; 
 aggregate out-of-sample return is 16.3799% with a Sharpe of 0.7733 over 8 folds. That gap is the
 point of walk-forward.
 
-## Real-data case study
+## Real-data case studies
+
+### Single asset: SPY
 
 The committed report is [`docs/case_study.html`](docs/case_study.html) and is also served at
 [ikerabad.github.io/backtest-engine/case_study.html](https://ikerabad.github.io/backtest-engine/case_study.html).
@@ -295,6 +299,52 @@ strategy stays flat. The detector reports the first decision where the traces di
 rejects `research_series` before a raw report can be produced, and the pytest suite asserts the
 failure on both the synthetic and the real dataset.
 
+### Multi-asset: SPY and TLT
+
+The two-asset report is [`docs/multi_asset.html`](docs/multi_asset.html) and is served at
+[ikerabad.github.io/backtest-engine/multi_asset.html](https://ikerabad.github.io/backtest-engine/multi_asset.html).
+It uses `data/spy_tlt_daily.csv`: 5,028 rows, 2,514 timestamps, two symbols, same 2016-2026 range.
+
+The strategy is `RelativeMomentum`: on the first bar of each month it computes each asset's return
+over a lookback window and puts 100% of equity in the winner. Walk-forward uses 504-bar training,
+252-bar test, 252-bar step and a lookback grid of 63/126/252 over 7 folds.
+
+| Out-of-sample metric | Relative momentum | Static 50/50 |
+|---|---:|---:|
+| Total return | 34.2857% | 91.2796% |
+| Annualized volatility | 17.8669% | 12.2823% |
+| Sharpe ratio | 0.3258 | 0.8189 |
+| Max drawdown | -46.6757% | -27.8624% |
+
+The strategy **underperforms the static 50/50 reference** and has a much deeper drawdown. It made 93
+fills and selected SPY in 69 rebalances and TLT in 22. Total costs were 8,182.70. The result is
+published as measured.
+
+Capital allocation and per-asset costs:
+
+- Target weights are fractions of total equity. This strategy uses `w_SPY + w_TLT = 1`, so gross
+  exposure is 100% and cash is only the residual after fills. The engine does not enforce a budget;
+  the strategy is responsible for the sum of absolute weights.
+- Each asset's fill is charged on its own notional and volume:
+  `commission_i = fixed + bps * |qty_i| * open_i / 10_000`. A switch from SPY to TLT produces two
+  fills, so the fixed commission is paid twice. Spread and slippage use that asset's own bar.
+
+| Asset | Fills | Notional | Commission | Spread | Slippage | Total |
+|---|---:|---:|---:|---:|---:|---:|
+| SPY | 62 | 22,633,022.92 | 2,263.30 | 2,263.30 | 9.00 | 4,535.61 |
+| TLT | 31 | 17,556,560.78 | 1,755.66 | 1,755.66 | 135.78 | 3,647.09 |
+| Total | 93 | 40,189,583.70 | 4,018.96 | 4,018.96 | 144.78 | 8,182.70 |
+
+The multi-asset detector cases:
+
+- The honest `RelativeMomentum` replay passes with 0 future reads and 0 divergent decisions.
+- `MultiAssetFutureTrap` peeks at both assets' next bar on every rebalance. The detector logs 242
+  future reads and 121 divergent decisions. The first is decision #0 on 2016-11-21: normal
+  `SPY +1.000000, TLT +0.000000`; masked `SPY +0.000000, TLT +0.000000`. Normal final equity is
+  2,025,864.26 against 1,000,000.00 masked.
+- `tests/test_multi_asset.py` asserts the detection, the allocation split and the per-asset
+  commissions. Strict mode rejects the trap before a raw report can be produced.
+
 ## Measured performance
 
 One 10-year daily backtest, release build, measured on 2026-11-23:
@@ -330,8 +380,10 @@ Ubuntu, Windows and macOS:
   module, no `pow`.
 - The committed engine report hash lives in `reports/expected.sha256` and is checked by
   `scripts/verify_report.py` on Ubuntu, Windows and macOS.
-- The real-data case study hash lives in `docs/case_study.sha256` and is checked by
-  `scripts/verify_case_study.py` on Ubuntu and Windows.
+- The single-asset case study hash lives in `docs/case_study.sha256` and is checked by
+  `scripts/verify_case_study.py` on all three platforms.
+- The multi-asset case study hash lives in `docs/multi_asset.sha256` and is checked by
+  `scripts/verify_multi_asset_case.py` on all three platforms.
 
 `tests/test_report.py` also checks that two in-process runs produce byte-identical HTML.
 
@@ -376,18 +428,20 @@ src/
   types.rs      Bar, Order, Trade, Decision, DataAccess, EngineConfig, result
   lib.rs        PyO3 module and Python strategy adapter
 python/backtest_engine/
-  strategies.py moving average, mean reversion, look-ahead trap, full-sample z-score
+  strategies.py moving average, mean reversion, look-ahead trap, full-sample z-score,
+                relative momentum and the multi-asset future trap
   detector.py   normal vs masked replay and divergence report
   walkforward.py non-overlapping folds and aggregate out-of-sample metrics
   report.py     byte-exact report writer
   cli.py        backtest / check / walkforward commands
   _backtest_engine.pyi  complete type stubs
 data/sample.csv committed synthetic point-in-time dataset
-data/spy_daily.csv committed real SPY daily history and metadata
-docs/            case study HTML, index page and benchmark results
+data/spy_daily.csv committed real SPY history and metadata
+data/spy_tlt_daily.csv committed real SPY/TLT history and metadata
+docs/            case studies, index page and benchmark results
 reports/         committed engine report and expected SHA-256
-scripts/         data fetch, case study builder, verifiers and benchmark
-tests/           pytest acceptance, real-data and determinism tests
+scripts/         data fetch, case study builders, verifiers and benchmark
+tests/           pytest acceptance, real-data, multi-asset and determinism tests
 ```
 
 The Rust core also has unit tests for queue ordering, revision visibility, cost arithmetic, metric
@@ -403,9 +457,10 @@ math, next-open execution and strict/masked modes (`cargo test`).
    `ruff format --check` and `mypy --strict`.
 3. **Reproducible engine report**: on all three OSes, run `examples/run_example.py`, verify
    `reports/expected.sha256`, and confirm that the deliberate trap is detected.
-4. **Real-data case study**: on Ubuntu and Windows, rebuild `docs/case_study.html`, verify
-   `docs/case_study.sha256`, and confirm that the subtle full-sample strategy is detected. The
-   report is uploaded as an artifact.
+4. **Real-data case studies**: on all three OSes, rebuild the single-asset and multi-asset reports,
+   verify `docs/case_study.sha256` and `docs/multi_asset.sha256`, and confirm that both the subtle
+   full-sample strategy and the multi-asset future trap are detected. The reports are uploaded as
+   artifacts.
 
 ## Scope and limitations
 
@@ -414,12 +469,12 @@ HTML reporting, deterministic hashing.
 
 Out of scope: broker connections, paid data, portfolio optimisation, margin/borrow costs, dividends,
 corporate actions, taxes, intraday calendars and survivorship-bias-free universe construction. The
-sample has one symbol; the engine's portfolio and store are multi-symbol, but the example
-strategies are single-asset. Slippage is linear in participation, not a square-root impact model.
-The real-data CSV is a snapshot from Yahoo Finance and is used for research; check the provider's
-terms before commercial redistribution. A strategy that loads its own DataFrame and precomputes
-full-sample indicators outside `ctx` is outside the detector's reach. This is research software,
-not investment advice.
+synthetic sample has one symbol; the real-data multi-asset case covers two. The engine supports
+arbitrary symbols and the portfolio accounting is per asset. Slippage is linear in participation, not
+a square-root impact model. The real-data CSVs are snapshots from Yahoo Finance and are used for
+research; check the provider's terms before commercial redistribution. A strategy that loads its own
+DataFrame and precomputes full-sample indicators outside `ctx` is outside the detector's reach. This
+is research software, not investment advice.
 
 ## License
 

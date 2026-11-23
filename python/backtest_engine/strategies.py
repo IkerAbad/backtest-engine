@@ -155,9 +155,96 @@ class FullSampleZScore:
         return [ctx.order(bar.symbol, weight)]
 
 
+class RelativeMomentum:
+    """Two-asset relative momentum with a monthly rebalance.
+
+    On the first bar of each month it compares each asset's return over
+    ``lookback`` bars and puts 100% of equity in the winner. Target weights are
+    fractions of total equity, so the pair (1.0, 0.0) uses 100% of capital and
+    leaves no cash. The strategy emits both legs from the first callback of the
+    timestamp; later callbacks at the same timestamp are no-ops.
+    """
+
+    def __init__(
+        self,
+        symbols: tuple[str, str] = ("SPY", "TLT"),
+        lookback: int = 126,
+    ) -> None:
+        if len(symbols) != 2:
+            raise ValueError("RelativeMomentum needs exactly two symbols")
+        if lookback < 1:
+            raise ValueError("lookback must be >= 1")
+        self.symbols = symbols
+        self.lookback = lookback
+        self._last_month: str | None = None
+
+    def on_bar(self, ctx: Context, bar: Bar) -> list[Order]:
+        month = bar.date[:7]
+        if month == self._last_month:
+            return []
+        self._last_month = month
+
+        momentum: dict[str, float] = {}
+        for symbol in self.symbols:
+            history = ctx.history(symbol, self.lookback)
+            current = ctx.price(symbol)
+            if current is None or len(history) < self.lookback:
+                return []
+            base = history[0].close
+            if base <= 0.0:
+                return []
+            momentum[symbol] = current / base - 1.0
+
+        # Deterministic tie-break: the alphabetically first symbol wins.
+        winner = min(self.symbols, key=lambda symbol: (-momentum[symbol], symbol))
+        return [ctx.order(symbol, 1.0 if symbol == winner else 0.0) for symbol in self.symbols]
+
+
+class MultiAssetFutureTrap:
+    """Deliberate cross-sectional look-ahead.
+
+    On the first bar of each month it reads the next bar of both assets and
+    allocates to the one with the higher next-bar return. The masked replay
+    sees no future bars and stays flat. This exists to prove that the detector
+    covers multi-asset strategies.
+    """
+
+    def __init__(
+        self,
+        symbols: tuple[str, str] = ("SPY", "TLT"),
+        horizon_seconds: int = 86_400,
+    ) -> None:
+        if len(symbols) != 2:
+            raise ValueError("MultiAssetFutureTrap needs exactly two symbols")
+        if horizon_seconds <= 0:
+            raise ValueError("horizon_seconds must be positive")
+        self.symbols = symbols
+        self.horizon_seconds = horizon_seconds
+        self._last_month: str | None = None
+
+    def on_bar(self, ctx: Context, bar: Bar) -> list[Order]:
+        month = bar.date[:7]
+        if month == self._last_month:
+            return []
+        self._last_month = month
+
+        expected: dict[str, float] = {}
+        for symbol in self.symbols:
+            current = ctx.price(symbol)
+            future = ctx.as_of(symbol, ctx.now + self.horizon_seconds)
+            if current is None or future is None or current <= 0.0:
+                return [ctx.order(symbol, 0.0) for symbol in self.symbols]
+            expected[symbol] = future.close / current - 1.0
+
+        winner = max(self.symbols, key=lambda symbol: (expected[symbol], symbol))
+        return [ctx.order(symbol, 1.0 if symbol == winner else 0.0) for symbol in self.symbols]
+
+
 STRATEGIES = {
     "moving_average": MovingAverage,
     "mean_reversion": MeanReversion,
     "lookahead_trap": LookAheadTrap,
     "full_sample_zscore": FullSampleZScore,
+    "relative_momentum": RelativeMomentum,
+    "multi_asset_trap": MultiAssetFutureTrap,
 }

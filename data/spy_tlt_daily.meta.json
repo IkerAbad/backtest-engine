@@ -1,0 +1,24 @@
+{
+  "adjustment": "OHLC scaled by Yahoo adjclose/close; volume unchanged",
+  "bars": {
+    "SPY": 2514,
+    "TLT": 2514
+  },
+  "csv_sha256": "aa12fdae89a3740aaa91bad77ec5e071e96384f49cbb418035c57e544739e076",
+  "first_date": "2016-11-21T21:00:00Z",
+  "last_date": "2026-11-20T21:00:00Z",
+  "notes": "Daily bars timestamped at 21:00 UTC. Yahoo data is used for research; check the provider terms before redistributing or using commercially.",
+  "requested_end": "2026-11-22",
+  "requested_start": "2016-11-21",
+  "retrieved_at": "2026-11-23T16:29:25Z",
+  "rows": 5028,
+  "source": "Yahoo Finance chart API",
+  "source_urls": {
+    "SPY": "https://query1.finance.yahoo.com/v8/finance/chart/SPY?period1=1479686400&period2=1795305600&interval=1d&events=history&includeAdjustedClose=true",
+    "TLT": "https://query1.finance.yahoo.com/v8/finance/chart/TLT?period1=1479686400&period2=1795305600&interval=1d&events=history&includeAdjustedClose=true"
+  },
+  "symbols": [
+    "SPY",
+    "TLT"
+  ]
+}

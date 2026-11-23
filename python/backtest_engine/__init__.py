@@ -33,6 +33,8 @@ from .strategies import (
     LookAheadTrap,
     MeanReversion,
     MovingAverage,
+    MultiAssetFutureTrap,
+    RelativeMomentum,
     Strategy,
 )
 from .walkforward import Fold, WalkForwardResult, walk_forward
@@ -58,8 +60,10 @@ __all__ = [
     "MeanReversion",
     "Metrics",
     "MovingAverage",
+    "MultiAssetFutureTrap",
     "Order",
     "PointInTimeStore",
+    "RelativeMomentum",
     "Strategy",
     "Trade",
     "WalkForwardResult",

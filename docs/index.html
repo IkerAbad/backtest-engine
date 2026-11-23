@@ -17,18 +17,21 @@ p{color:#4b4f55}a{color:#1d4ed8}code{background:#ececea;padding:2px 5px;border-r
 <h1>Documentation</h1>
 <p>Deterministic, event-driven backtesting with a look-ahead detector.</p>
 <div class="card">
-<h2>Real-data case study</h2>
-<p>SPY daily, 2016-11-21 to 2026-11-20. Walk-forward moving average, costs, buy-and-hold
-comparison, and a subtle full-sample look-ahead strategy caught by the detector.</p>
-<p><a href="case_study.html">Open the case study report</a></p>
+<h2>Real-data case studies</h2>
+<p><strong>Single asset:</strong> SPY daily, 2016-11-21 to 2026-11-20. Walk-forward moving average,
+costs, buy-and-hold comparison, and a subtle full-sample look-ahead strategy caught by the detector.</p>
+<p><a href="case_study.html">Open the SPY case study</a></p>
+<p><strong>Two assets:</strong> SPY and TLT. Relative momentum with monthly rebalancing, per-asset
+costs, capital allocation, and a cross-sectional future trap caught by the detector.</p>
+<p><a href="multi_asset.html">Open the SPY/TLT case study</a></p>
 </div>
 <h2>Source and package</h2>
 <p><a href="https://github.com/IkerAbad/backtest-engine">github.com/IkerAbad/backtest-engine</a><br>
 <code>pip install backtest-engine</code></p>
 <h2>Reproducibility</h2>
-<p>The report hash is committed in <code>case_study.sha256</code> and verified in CI on Linux
-and Windows. The engine report in <code>../reports/example.html</code> is verified on Linux,
-Windows and macOS.</p>
+<p>The report hashes are committed in <code>case_study.sha256</code> and
+<code>multi_asset.sha256</code> and verified in CI on Linux, Windows and macOS. The engine report in
+<code>../reports/example.html</code> is verified on the same platforms.</p>
 </main>
 </body>
 </html>
