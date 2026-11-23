@@ -1,6 +1,7 @@
 # backtest-engine
 
 [![CI](https://github.com/IkerAbad/backtest-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/IkerAbad/backtest-engine/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/backtest-engine.svg)](https://pypi.org/project/backtest-engine/)
 
 Event-driven backtesting engine that treats look-ahead bias as something to **prove absent**, not
 something to avoid by convention. The core is Rust, strategies are Python, and every reported result
@@ -8,11 +9,13 @@ is reproduced against a future-masked replay before an HTML report is written.
 
 - Deterministic event queue ordered by `(data timestamp, symbol)`, with a simulated clock.
 - Point-in-time store with row versioning: a revision published at `T+2d` is invisible at `T`.
-- Strategies receive one bar at a time and can only touch a clock-bounded data view.
+- Strategies receive one bar at a time; the default data view is bounded by the clock.
 - A detector runs the same strategy twice, once with the future masked, and fails on any difference.
 - Configurable commission, spread and volume-proportional slippage.
 - Walk-forward folds with non-overlapping train and test windows.
-- Self-contained HTML report whose SHA-256 is verified on Linux, Windows and macOS in CI.
+- Real-data case study: 10 years of SPY, walk-forward, buy-and-hold comparison and a subtle
+  full-sample look-ahead strategy that the detector catches.
+- Self-contained HTML reports whose SHA-256 is verified on Linux, Windows and macOS in CI.
 
 ## Why Rust with PyO3
 
@@ -38,10 +41,16 @@ Reasons for this choice:
    store and engine move `String`, `Vec` and shared state across the boundary. Rust's ownership
    model and clippy catch classes of mistakes that would be manual review work in C++.
 
-The trade-off is a Rust toolchain at build time. Prebuilt wheels are not published; the source
-build is one `pip install .`.
+The trade-off is a Rust toolchain at build time for source installs. Prebuilt `abi3` wheels are
+published on PyPI, so `pip install backtest-engine` needs no compiler.
 
-## Quickstart
+## Install
+
+```bash
+python -m pip install backtest-engine
+```
+
+From a checkout, for development:
 
 ```bash
 python -m venv .venv
@@ -49,11 +58,10 @@ python -m venv .venv
 # Linux/macOS: source .venv/bin/activate
 python -m pip install maturin
 maturin develop --release
-
 python examples/run_example.py
 ```
 
-Or install like a normal Python package (it builds the Rust extension):
+Or build and install the wheel path used by CI:
 
 ```bash
 python -m pip install .
@@ -71,6 +79,9 @@ python -m backtest_engine check --strategy moving_average
 
 # Deliberate cheat: exits 0 only because --expect-detected confirms the rejection
 python -m backtest_engine check --strategy lookahead_trap --expect-detected
+
+# Subtle cheat: full-sample normalization, also caught
+python -m backtest_engine check --strategy full_sample_zscore --expect-detected
 
 # Walk-forward with non-overlapping test windows
 python -m backtest_engine walkforward --strategy moving_average \
@@ -114,10 +125,17 @@ What `ctx` exposes:
 | `ctx.price(symbol)` | Latest close visible at the clock |
 | `ctx.history(symbol, n)` | Last `n` completed bars, point-in-time, strictly before the clock |
 | `ctx.as_of(symbol, ts)` | Latest version visible at `ts`; future requests are rejected by default |
+| `ctx.research_series(symbol)` | Audited escape hatch: the whole stored series, including the future. Rejected in strict mode; masked in the detector |
 | `ctx.order(symbol, weight)` | Target weight in `[-1, 1]`; executes at the next bar's open |
 
 Orders are target weights, not market orders. The engine sizes the quantity from current equity and
 schedules the fill for the next event of that symbol. A signal on bar `T` can never fill on bar `T`.
+
+`ctx.research_series` exists only to model the common mistake of handing a complete DataFrame to a
+strategy. It is refused by default (`strict_future_access=True`) and truncated at the clock in the
+detector's masked replay. The engine cannot inspect data that a strategy loads outside its context;
+if you precompute indicators in a separate pandas object, the detector has nothing to instrument.
+Use the engine's data view for anything you intend to publish.
 
 ## Point-in-time data
 
@@ -180,6 +198,13 @@ first bar, and the pytest suite asserts that exact failure (`tests/test_detector
 With the default config, a raw `run_backtest` refuses future reads immediately with
 `FutureAccessError`; the detector opts into the audited/masked modes explicitly.
 
+A second example, `FullSampleZScore`, uses `ctx.research_series` to compute the mean and standard
+deviation of the whole sample and normalizes each close with them. It never reads a future price
+directly. The detector still fails it: the normal run logs one `research_series` read through the
+end of the dataset, the masked run only sees bars up to the clock, and the first target weight
+changes from `+0.660893` to `+0.000000` on the real SPY data. `check --strategy
+full_sample_zscore --expect-detected` returns 0 only because the rejection is confirmed.
+
 ## Cost model
 
 All parameters are on `EngineConfig`:
@@ -221,6 +246,76 @@ window on 252-bar training blocks and reports only the following 63-bar blocks; 
 aggregate out-of-sample return is 16.3799% with a Sharpe of 0.7733 over 8 folds. That gap is the
 point of walk-forward.
 
+## Real-data case study
+
+The committed report is [`docs/case_study.html`](docs/case_study.html) and is also served at
+[ikerabad.github.io/backtest-engine/case_study.html](https://ikerabad.github.io/backtest-engine/case_study.html).
+It is generated only from committed inputs: `data/spy_daily.csv`, its metadata and the engine.
+
+- Asset: SPY, 2,514 daily bars, 2016-11-21 to 2026-11-20.
+- Source: Yahoo Finance chart API, OHLC adjusted with Yahoo's `adjclose`, volume unchanged.
+- Data hash: CSV SHA-256 `2db20ca1bd97775f20b913b2b4fc9620c3bbf130b735a1e1d1b6e0b4f3da8fff`,
+  engine canonical hash `4f5c488080735c1d7fd06b4e206ef8dda958f5c9671df3f99791a558a7cd6ebb`.
+- Walk-forward: 504-bar training, 252-bar test, 252-bar step, windows 20/50/100/200, 7 folds.
+- Costs: the same 1 bp commission, 2 bps spread and 100 bps full-volume slippage.
+
+| Out-of-sample metric | Walk-forward strategy | Buy and hold |
+|---|---:|---:|
+| Total return | 69.1985% | 187.5521% |
+| Annualized volatility | 10.0943% | 20.0574% |
+| Sharpe ratio | 0.7980 | 0.8560 |
+| Max drawdown | -12.9362% | -33.7173% |
+
+The strategy **underperforms buy-and-hold** on total return, and its Sharpe is slightly lower. It
+does cut volatility and the maximum drawdown. The walk-forward run made 257 fills. The report
+publishes that result; nothing is hand-entered.
+
+### Subtle full-sample look-ahead
+
+`FullSampleZScore` is the second cheat. It computes the mean and standard deviation of the **entire
+sample** and uses them to normalize every close. It does not read tomorrow's price and it does not
+trade on a future bar directly, so the leak is purely statistical.
+
+The detector catches it on the real data:
+
+| Field | Value |
+|---|---|
+| Check | FAILED |
+| Future reads | 1, kind `research_series` |
+| First read | 2016-11-21, requesting through 2026-11-20 |
+| First divergent decision | #0 on 2016-11-21, SPY |
+| Normal target weight | +0.660893 |
+| Masked target weight | +0.000000 |
+| Divergent decisions | 2,514 |
+| Normal final equity | 1,209,445.25 |
+| Masked final equity | 1,000,000.00 |
+
+The masked replay sees only bars up to the clock, so the first standard deviation is zero and the
+strategy stays flat. The detector reports the first decision where the traces differ. Strict mode
+rejects `research_series` before a raw report can be produced, and the pytest suite asserts the
+failure on both the synthetic and the real dataset.
+
+## Measured performance
+
+One 10-year daily backtest, release build, measured on 2026-11-23:
+
+| Field | Value |
+|---|---|
+| Hardware | AMD Ryzen 9 5900X, 32 GB DDR4-3600 CL16 |
+| OS / Python / Rust | Windows 11 Pro 10.0.26300 / CPython 3.12.10 / 1.100.0 |
+| Dataset | SPY daily, 2,514 bars |
+| Strategy | `MovingAverage(window=100)` |
+| Median time | 11.01 ms per backtest |
+| Fastest / slowest | 10.72 ms / 12.00 ms |
+| Throughput | 228,387 events/second |
+| Peak process RSS | 25.17 MB |
+
+Timing wraps only `run_backtest`; CSV parsing and interpreter startup are excluded. A run includes
+the event queue, point-in-time reads, 2,514 Python callbacks, order sizing, fills, accounting and
+metrics. Peak RSS includes the interpreter and the loaded dataset. The full method and raw JSON are
+in [`docs/benchmark.md`](docs/benchmark.md) and [`docs/benchmark.json`](docs/benchmark.json).
+These numbers are machine-specific and are not part of the report hash.
+
 ## Determinism
 
 The same data and strategy produce the same report bytes, and CI verifies the committed SHA-256 on
@@ -233,7 +328,10 @@ Ubuntu, Windows and macOS:
   Windows cannot rewrite line endings.
 - The reference strategies use only basic IEEE-754 operations and `math.sqrt`; no NumPy, no random
   module, no `pow`.
-- The committed hash lives in `reports/expected.sha256`; `scripts/verify_report.py` recomputes it.
+- The committed engine report hash lives in `reports/expected.sha256` and is checked by
+  `scripts/verify_report.py` on Ubuntu, Windows and macOS.
+- The real-data case study hash lives in `docs/case_study.sha256` and is checked by
+  `scripts/verify_case_study.py` on Ubuntu and Windows.
 
 `tests/test_report.py` also checks that two in-process runs produce byte-identical HTML.
 
@@ -278,15 +376,18 @@ src/
   types.rs      Bar, Order, Trade, Decision, DataAccess, EngineConfig, result
   lib.rs        PyO3 module and Python strategy adapter
 python/backtest_engine/
-  strategies.py moving average, mean reversion, deliberate look-ahead trap
+  strategies.py moving average, mean reversion, look-ahead trap, full-sample z-score
   detector.py   normal vs masked replay and divergence report
   walkforward.py non-overlapping folds and aggregate out-of-sample metrics
   report.py     byte-exact report writer
   cli.py        backtest / check / walkforward commands
   _backtest_engine.pyi  complete type stubs
 data/sample.csv committed synthetic point-in-time dataset
-reports/         committed example report and expected SHA-256
-tests/           pytest acceptance and determinism tests
+data/spy_daily.csv committed real SPY daily history and metadata
+docs/            case study HTML, index page and benchmark results
+reports/         committed engine report and expected SHA-256
+scripts/         data fetch, case study builder, verifiers and benchmark
+tests/           pytest acceptance, real-data and determinism tests
 ```
 
 The Rust core also has unit tests for queue ordering, revision visibility, cost arithmetic, metric
@@ -300,9 +401,11 @@ math, next-open execution and strict/masked modes (`cargo test`).
    `cargo test --locked`.
 2. **Python**: on Ubuntu, Windows and macOS, build with maturin, run `pytest`, `ruff check`,
    `ruff format --check` and `mypy --strict`.
-3. **Reproducible report**: on all three OSes, run `examples/run_example.py`, verify
-   `reports/expected.sha256`, and confirm that the deliberate trap is detected. The generated report
-   is uploaded as an artifact.
+3. **Reproducible engine report**: on all three OSes, run `examples/run_example.py`, verify
+   `reports/expected.sha256`, and confirm that the deliberate trap is detected.
+4. **Real-data case study**: on Ubuntu and Windows, rebuild `docs/case_study.html`, verify
+   `docs/case_study.sha256`, and confirm that the subtle full-sample strategy is detected. The
+   report is uploaded as an artifact.
 
 ## Scope and limitations
 
@@ -313,7 +416,10 @@ Out of scope: broker connections, paid data, portfolio optimisation, margin/borr
 corporate actions, taxes, intraday calendars and survivorship-bias-free universe construction. The
 sample has one symbol; the engine's portfolio and store are multi-symbol, but the example
 strategies are single-asset. Slippage is linear in participation, not a square-root impact model.
-This is research software, not investment advice.
+The real-data CSV is a snapshot from Yahoo Finance and is used for research; check the provider's
+terms before commercial redistribution. A strategy that loads its own DataFrame and precomputes
+full-sample indicators outside `ctx` is outside the detector's reach. This is research software,
+not investment advice.
 
 ## License
 

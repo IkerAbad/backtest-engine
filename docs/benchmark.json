@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-23",
+  "hardware": "AMD Ryzen 9 5900X 12-Core Processor",
+  "os": "Windows-11-10.0.26300-SP0",
+  "python": "3.12.10",
+  "python_implementation": "CPython",
+  "rust_toolchain": "1.100.0",
+  "dataset": "data/spy_daily.csv",
+  "bars": 2514,
+  "strategy": "MovingAverage(window=100)",
+  "iterations": 50,
+  "warmup": 5,
+  "median_ms": 11.00764999864623,
+  "min_ms": 10.720499994931743,
+  "max_ms": 11.998600006336346,
+  "events_per_second": 228386.62205913005,
+  "peak_rss_mb": 25.171875,
+  "peak_rss_method": "GetProcessMemoryInfo PeakWorkingSetSize",
+  "total_return": 1.8318844067119264,
+  "sharpe": 0.9821733860699055
+}

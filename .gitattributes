@@ -1,5 +1,6 @@
 * text=auto eol=lf
 reports/example.html -text
+docs/case_study.html -text
 *.pyd binary
 *.so binary
 *.dylib binary
