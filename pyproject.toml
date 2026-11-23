@@ -1,0 +1,41 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "backtest-engine"
+version = "0.1.0"
+description = "Event-driven backtesting engine that proves the absence of look-ahead bias"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Iker Abad" }]
+keywords = ["backtesting", "look-ahead", "quantitative-finance", "rust", "pyo3"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = []
+
+[tool.maturin]
+python-source = "python"
+module-name = "backtest_engine._backtest_engine"
+features = ["extension-module"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["python/backtest_engine"]
+mypy_path = "python"

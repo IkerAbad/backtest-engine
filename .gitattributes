@@ -1,0 +1,5 @@
+* text=auto eol=lf
+reports/example.html -text
+*.pyd binary
+*.so binary
+*.dylib binary
