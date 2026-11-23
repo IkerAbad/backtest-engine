@@ -22,6 +22,12 @@ classifiers = [
 ]
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/IkerAbad/backtest-engine"
+Repository = "https://github.com/IkerAbad/backtest-engine"
+Documentation = "https://ikerabad.github.io/backtest-engine/"
+CaseStudy = "https://ikerabad.github.io/backtest-engine/case_study.html"
+
 [tool.maturin]
 python-source = "python"
 module-name = "backtest_engine._backtest_engine"
